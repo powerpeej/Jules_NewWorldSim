@@ -32,45 +32,81 @@ def generate_terrain_mathematical(terrain_array):
     return terrain_array
 
 def simulation_step(terrain, water):
-    """Runs one iteration of the water physics simulation."""
+    """
+    Runs one iteration of the water physics simulation using a vectorized approach
+    for more realistic and efficient horizontal water flow.
+    """
     dims = terrain.shape
     max_water_per_cell = 1.0
-    
-    # --- Downward Flow ---
+    flow_speed = 0.5  # Controls how quickly water equalizes per step
+    epsilon = 1e-5    # Small constant to prevent division by zero
+
+    # --- Downward Flow (Gravity) ---
+    # Water flows from a cell to the one directly below it if it's not rock.
+    # This loop is necessary to simulate gravity layer by layer correctly.
     for z in range(dims[2] - 1):
-        can_flow_down = (water[:, :, z+1] > 0) & (terrain[:, :, z] == 0)
+        water_above = water[:, :, z + 1]
+        can_flow_down = (water_above > 0) & (terrain[:, :, z] == 0)
         free_space_below = max_water_per_cell - water[:, :, z]
-        water_to_move = np.minimum(water[:, :, z+1], free_space_below)
+        water_to_move = np.minimum(water_above, free_space_below)
         flow_amount = np.where(can_flow_down, water_to_move, 0)
-        water[:, :, z+1] -= flow_amount
+        water[:, :, z + 1] -= flow_amount
         water[:, :, z] += flow_amount
 
-    # --- Horizontal Flow ---
-    # A copy is needed to avoid cascading updates within a single step
-    water_copy = np.copy(water)
-    for x in range(1, dims[0]-1):
-        for y in range(1, dims[1]-1):
-            for z in range(dims[2]):
-                if water_copy[x, y, z] > 0.001 and terrain[x,y,z] == 0:
-                    neighbors = []
-                    if terrain[x-1, y, z] == 0: neighbors.append((x-1, y, z))
-                    if terrain[x+1, y, z] == 0: neighbors.append((x+1, y, z))
-                    if terrain[x, y-1, z] == 0: neighbors.append((x, y-1, z))
-                    if terrain[x, y+1, z] == 0: neighbors.append((x, y+1, z))
-                    
-                    if not neighbors:
-                        continue
+    # --- Horizontal Flow (Pressure) ---
+    # Water flows from cells with more water to adjacent cells with less.
+    # This process is vectorized for performance.
+    water_old = np.copy(water)
 
-                    total_water = water_copy[x, y, z]
-                    for nx, ny, nz in neighbors:
-                        total_water += water_copy[nx, ny, nz]
-                    
-                    all_cells = neighbors + [(x, y, z)]
-                    avg_water = total_water / len(all_cells)
-                    
-                    # Distribute the water in the original array
-                    for nx, ny, nz in all_cells:
-                        water[nx, ny, nz] = min(avg_water, max_water_per_cell)
+    # Calculate potential flow to each of the 4 horizontal neighbors
+    # Flow is calculated based on the difference in water levels.
+
+    # Calculate differences with neighbors (positive means current cell is higher)
+    # Using np.roll and then correcting for boundaries is a clean way to handle this.
+    diff_N = water_old - np.roll(water_old, 1, axis=1)
+    diff_S = water_old - np.roll(water_old, -1, axis=1)
+    diff_W = water_old - np.roll(water_old, 1, axis=0)
+    diff_E = water_old - np.roll(water_old, -1, axis=0)
+
+    # Calculate flow only where the current cell is higher and the neighbor is not terrain
+    flow_N = np.maximum(0, diff_N) * (terrain == 0) * (np.roll(terrain, 1, axis=1) == 0)
+    flow_S = np.maximum(0, diff_S) * (terrain == 0) * (np.roll(terrain, -1, axis=1) == 0)
+    flow_W = np.maximum(0, diff_W) * (terrain == 0) * (np.roll(terrain, 1, axis=0) == 0)
+    flow_E = np.maximum(0, diff_E) * (terrain == 0) * (np.roll(terrain, -1, axis=0) == 0)
+
+    # Correct for wrap-around at boundaries
+    flow_N[:, 0, :] = 0
+    flow_S[:, -1, :] = 0
+    flow_W[0, :, :] = 0
+    flow_E[-1, :, :] = 0
+
+    # Sum of all potential outgoing flows from each cell
+    total_flow_out = flow_N + flow_S + flow_W + flow_E
+
+    # Normalize flows to prevent a cell from giving away more water than it has
+    scale_factor = np.divide(water_old, total_flow_out, out=np.ones_like(water_old), where=total_flow_out > epsilon)
+    scale_factor = np.minimum(1.0, scale_factor)
+
+    # Apply the scaling factor and flow speed
+    flow_N *= scale_factor * flow_speed
+    flow_S *= scale_factor * flow_speed
+    flow_W *= scale_factor * flow_speed
+    flow_E *= scale_factor * flow_speed
+
+    # Calculate the net change in water for each cell
+    delta_water = np.zeros_like(water)
+
+    # Subtract outflows
+    delta_water -= (flow_N + flow_S + flow_W + flow_E)
+
+    # Add inflows from neighbors (by rolling the outflow arrays)
+    delta_water += np.roll(flow_S, 1, axis=1)  # Inflow from North is neighbor's flow_S
+    delta_water += np.roll(flow_N, -1, axis=1) # Inflow from South is neighbor's flow_N
+    delta_water += np.roll(flow_E, 1, axis=0)  # Inflow from West is neighbor's flow_E
+    delta_water += np.roll(flow_W, -1, axis=0) # Inflow from East is neighbor's flow_W
+
+    # Update the water array
+    water += delta_water
 
 
 def visualize_world(terrain, water):
