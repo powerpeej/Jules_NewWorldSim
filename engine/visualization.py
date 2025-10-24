@@ -18,19 +18,20 @@ def visualize_world(terrain, water, title="World Simulation State"):
 
     water_depth = np.sum(water, axis=2)
 
-    plt.figure(figsize=(10, 8))
-    plt.title(title)
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.set_title(title)
 
     # Display terrain heightmap
-    plt.imshow(heightmap.T, cmap='gist_earth', origin='lower', vmin=0, vmax=terrain.shape[2])
+    terrain_plot = ax.imshow(heightmap.T, cmap='gist_earth', origin='lower', vmin=0, vmax=terrain.shape[2])
+    fig.colorbar(terrain_plot, ax=ax, label="Terrain Height", shrink=0.8, aspect=20)
 
-    # Overlay water depth, masking cells with very little water
-    masked_water = np.ma.masked_where(water_depth <= 0.01, water_depth)
-    plt.imshow(masked_water.T, cmap='Blues', origin='lower', alpha=0.7, vmin=0)
+    # Overlay water depth
+    masked_water = np.ma.masked_where(water_depth <= 0.1, water_depth)
+    water_plot = ax.imshow(masked_water.T, cmap='Blues', origin='lower', alpha=0.7, vmin=0)
+    fig.colorbar(water_plot, ax=ax, label="Water Depth", shrink=0.8, aspect=20)
 
-    plt.xlabel("X Coordinate")
-    plt.ylabel("Y Coordinate")
-    plt.colorbar(label="Terrain Height")
+    ax.set_xlabel("X Coordinate")
+    ax.set_ylabel("Y Coordinate")
 
     # Save the figure instead of showing it directly
     # This is better for non-interactive environments

@@ -17,38 +17,48 @@ def simulation_step(terrain, water):
         water[:, :, z] -= flow_amount
         water[:, :, z-1] += flow_amount
 
-    # --- Horizontal Flow (Corrected to Conserve Water) ---
+    # --- Horizontal Flow (Vectorized) ---
+    # This implementation is significantly faster than the nested-loop version.
+    # It calculates the flow between a cell and its four horizontal neighbors.
+
     # A copy is needed to read from a consistent state within the step.
     water_copy = np.copy(water)
 
-    # Iterate over each cell that could have water
-    for x in range(1, dims[0]-1):
-        for y in range(1, dims[1]-1):
-            for z in range(dims[2]):
-                # Process only if the cell is air and has water
-                if water_copy[x, y, z] > 0.001 and terrain[x, y, z] == 0:
+    # Define masks for valid cells (air and containing water)
+    is_air = terrain == 0
+    has_water = water_copy > 0.001
+    can_flow = is_air & has_water
 
-                    # Find neighbors that are also air
-                    neighbors = []
-                    if terrain[x-1, y, z] == 0: neighbors.append((x-1, y, z))
-                    if terrain[x+1, y, z] == 0: neighbors.append((x+1, y, z))
-                    if terrain[x, y-1, z] == 0: neighbors.append((x, y-1, z))
-                    if terrain[x, y+1, z] == 0: neighbors.append((x, y+1, z))
+    # Calculate total water in each cell and its open neighbors
+    # and the number of open neighbors for averaging.
+    total_water = np.copy(water_copy)
+    neighbor_count = np.ones(water.shape) # Start with 1 for the cell itself
 
-                    if not neighbors:
-                        continue
+    # Right neighbor
+    flow_potential = can_flow & np.roll(is_air, -1, axis=0)
+    total_water += np.where(flow_potential, np.roll(water_copy, -1, axis=0), 0)
+    neighbor_count += np.where(flow_potential, 1, 0)
 
-                    # Sum the water in the current cell and its open neighbors
-                    all_cells = neighbors + [(x, y, z)]
-                    total_water = 0
-                    for nx, ny, nz in all_cells:
-                        total_water += water_copy[nx, ny, nz]
+    # Left neighbor
+    flow_potential = can_flow & np.roll(is_air, 1, axis=0)
+    total_water += np.where(flow_potential, np.roll(water_copy, 1, axis=0), 0)
+    neighbor_count += np.where(flow_potential, 1, 0)
 
-                    # Calculate the new, equalized water level
-                    avg_water = total_water / len(all_cells)
+    # Back neighbor
+    flow_potential = can_flow & np.roll(is_air, -1, axis=1)
+    total_water += np.where(flow_potential, np.roll(water_copy, -1, axis=1), 0)
+    neighbor_count += np.where(flow_potential, 1, 0)
 
-                    # Distribute the averaged water level to all participating cells.
-                    # This correctly conserves water by not capping the amount.
-                    # The downward flow will handle cells with > 1.0 water.
-                    for nx, ny, nz in all_cells:
-                        water[nx, ny, nz] = avg_water
+    # Front neighbor
+    flow_potential = can_flow & np.roll(is_air, 1, axis=1)
+    total_water += np.where(flow_potential, np.roll(water_copy, 1, axis=1), 0)
+    neighbor_count += np.where(flow_potential, 1, 0)
+
+    # Avoid division by zero
+    neighbor_count[neighbor_count == 0] = 1
+
+    # Calculate the new, equalized water level
+    avg_water = total_water / neighbor_count
+
+    # Apply the averaged water level to the cells that can flow
+    water[can_flow] = avg_water[can_flow]
